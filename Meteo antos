@@ -1,0 +1,87 @@
+import streamlit as st
+import requests
+import pandas as pd
+import plotly.express as px
+from datetime import datetime
+
+# Configuration de la page pour mobile
+st.set_page_config(page_title="Pollen & Météo Pro", page_icon="🌿", layout="wide")
+
+# Style CSS pour améliorer le rendu sur mobile
+st.markdown("""
+    <style>
+    .stMetric { background-color: #f8f9fa; padding: 10px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    [data-testid="stMetricValue"] { font-size: 1.5rem !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- FONCTIONS DE RÉCUPÉRATION ---
+
+def get_coords(city):
+    url = f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1&language=fr&format=json"
+    res = requests.get(url).json()
+    return res["results"][0] if "results" in res else None
+
+def get_all_data(lat, lon):
+    # Météo, UV, Précipitations, Soleil
+    weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,uv_index&hourly=temperature_2m,precipitation_probability,uv_index&daily=sunrise,sunset&timezone=auto&forecast_days=2"
+    # Qualité de l'air et Pollens
+    aq_url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}&current=european_aqi,pm10,pm2_5&hourly=alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen&timezone=auto&forecast_days=2"
+    
+    return requests.get(weather_url).json(), requests.get(aq_url).json()
+
+# --- INTERFACE ---
+
+st.title("🌿 Pollen & Météo")
+
+city_input = st.text_input("Rechercher une ville :", "Paris")
+location = get_coords(city_input)
+
+if location:
+    lat, lon = location["latitude"], location["longitude"]
+    weather, aq = get_all_data(lat, lon)
+    
+    # Navigation par onglets pour mobile
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "📅 Pollens", "☀️ Météo", "🗺️ Carte"])
+
+    with tab1:
+        st.subheader(f"📍 {location['name']}")
+        c1, c2 = st.columns(2)
+        c1.metric("Température", f"{weather['current']['temperature_2m']}°C")
+        c1.metric("Qualité de l'Air (AQI)", f"{aq['current']['european_aqi']}")
+        c2.metric("Indice UV", f"{weather['current']['uv_index']}")
+        c2.metric("Précipitations", f"{weather['current']['precipitation']} mm")
+        
+        st.write(f"🌅 **Lever :** {weather['daily']['sunrise'][0][-5:]} | 🌇 **Coucher :** {weather['daily']['sunset'][0][-5:]}")
+
+    with tab2:
+        st.subheader("Prévisions horaires des pollens")
+        df_pollen = pd.DataFrame(aq["hourly"])
+        df_pollen['time'] = pd.to_datetime(df_pollen['time'])
+        
+        # Sélecteur de pollen pour le graphique
+        pollen_choice = st.selectbox("Choisir un pollen :", ["grass_pollen", "birch_pollen", "alder_pollen", "mugwort_pollen", "olive_pollen", "ragweed_pollen"])
+        fig_pollen = px.line(df_pollen, x='time', y=pollen_choice, title=f"Évolution {pollen_choice}")
+        st.plotly_chart(fig_pollen, use_container_width=True)
+
+    with tab3:
+        st.subheader("Détails Météo & UV")
+        df_weather = pd.DataFrame(weather["hourly"])
+        df_weather['time'] = pd.to_datetime(df_weather['time'])
+        
+        fig_temp = px.area(df_weather, x='time', y='temperature_2m', title="Température (°C)")
+        st.plotly_chart(fig_temp, use_container_width=True)
+        
+        fig_uv = px.bar(df_weather, x='time', y='uv_index', title="Indice UV")
+        st.plotly_chart(fig_uv, use_container_width=True)
+
+    with tab4:
+        st.subheader("Localisation")
+        # Carte simple centrée sur la ville
+        map_data = pd.DataFrame({'lat': [lat], 'lon': [lon]})
+        st.map(map_data)
+        st.info("Note : Les cartes de couches de pollen en temps réel nécessitent souvent des services payants, cette carte confirme votre zone d'analyse.")
+
+else:
+    st.error("Ville non trouvée.")
+
